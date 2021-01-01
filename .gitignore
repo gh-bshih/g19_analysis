@@ -10,3 +10,4 @@ test/
 20201112_iPCR_troubleshoot_regionmolarity/
 acsquery.ipynb
 scratch.ipynb
+*.pdf
