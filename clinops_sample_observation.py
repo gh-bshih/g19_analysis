@@ -166,7 +166,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
         logger.info(f'This file has been changed. Source path --> {event.src_path}')
 
         today = datetime.strftime(datetime.today(), '%y%m%d')
-        if bool(re.match(f'^.*{today}.*c19_read_counts.hdr.tsv?', event.src_path)):
+        if bool(re.match(f'^.*?{today}.*?c19_read_counts\.hdr\.tsv$', event.src_path)):
 
             flowcell = event.src_path[20:51]
             logger.info(f'Flowcell {flowcell} c19_read_counts created!')
