@@ -162,14 +162,12 @@ class Handler(watchdog.events.FileSystemEventHandler):
             assert e.response["error"]  # str like 'invalid_auth', 'channel_not_found'
             logger.info(f"Got an error: {e.response['error']}")
 
-    def on_any_event(self, event):
-        logger.info(f'This file has been changed. Source path --> {event.src_path}')
-
+    def on_created(self, event):
         today = datetime.strftime(datetime.today(), '%y%m%d')
         if bool(re.match(f'^.*?{today}.*?c19_read_counts\.hdr\.tsv$', event.src_path)):
 
             flowcell = event.src_path[20:51]
-            logger.info(f'Flowcell {flowcell} c19_read_counts created!')
+            logger.info(f'Flowcell {flowcell} c19_read_counts {event.event_type}!')
 
             current_read_counts = pd.read_csv(event.src_path, sep='\t')
             low_rnase_high_covid = Handler.sample_finder(current_read_counts)
