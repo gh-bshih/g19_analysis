@@ -13,19 +13,23 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from watchdog.observers.polling import PollingObserver as Observer
 
+
 ### Salesforce API Login ###
-logininfo = json.load(open('/ghds/groups/labdesk/bshih/salesforce_login.json'))
+def sf_login():
+    logininfo = json.load(open('/ghds/groups/labdesk/bshih/salesforce_login.json'))
 
-username = logininfo['username']
-password = logininfo['password']
-security_token = logininfo['security_token']
-domain = 'login'
+    username = logininfo['username']
+    password = logininfo['password']
+    security_token = logininfo['security_token']
 
-sf = Salesforce(username=username, password=password, security_token=security_token)
+    return Salesforce(username=username, password=password, security_token=security_token)
+
 
 ### Slack Token ###
-slack_token = json.load(open('/ghds/groups/labdesk/bshih/slack_login.json'))['SLACK_TOKEN']
-client = WebClient(token=slack_token)
+def slack_login():
+    slack_token = json.load(open('/ghds/groups/labdesk/bshih/slack_login.json'))['SLACK_TOKEN']
+    return WebClient(token=slack_token)
+
 
 ### Logger Setup ###
 # LOGGER_NAME = 'clinical_observation2'
@@ -66,11 +70,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
         return filtered
 
     @staticmethod
-    def salesforce_query(samples):
-        """
-        :param samples:
-        :return: Salesforce query of filtered samples
-        """
+    def salesforce_query(samples, sf):
         weird_samples = []
         for i in samples['run_sample_id'].unique():
             weird_samples.extend(sf.query_all(f"SELECT GH_Sample_ID__c, Status, Specimen_Collection_Date_Time__c, Specimen_receipt_date__c,\
@@ -85,9 +85,12 @@ class Handler(watchdog.events.FileSystemEventHandler):
                                                                   'Site_Name__c': 'Site Name'})
         df['Specimen Collection Date/Time'] = pd.to_datetime(df['Specimen Collection Date/Time']).dt \
             .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
-        df['State Authorities Notified Date'] = pd.to_datetime(df['State Authorities Notified Date']).dt \
-            .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
         df['Specimen receipt date'] = pd.to_datetime(df['Specimen receipt date']).dt.strftime('%-m/%-d/%y')
+        try:
+            df['State Authorities Notified Date'] = pd.to_datetime(df['State Authorities Notified Date']).dt \
+                .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
+        except TypeError:
+            pass
 
         return df
 
@@ -130,7 +133,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
 
     @staticmethod
     def create_pdf(samples, file_name):
-        fig, ax = plt.subplots(figsize=(35, len(samples) // 2))
+        fig, ax = plt.subplots(figsize=(35, len(samples) / 2))
         ax.axis('tight')
         ax.axis('off')
         the_table = ax.table(cellText=samples.values, colLabels=samples.columns, loc='center', rowLoc='right',
@@ -149,12 +152,12 @@ class Handler(watchdog.events.FileSystemEventHandler):
         pp.close()
 
     @staticmethod
-    def slack_upload(fcid, file_name):
+    def slack_upload(fcid, file_name, client):
         filepath = f'/ghds/groups/labdesk/bshih/clinical_observation/{file_name}.pdf'
 
         try:
             result = client.files_upload(
-                channels='#g19_sample_observation',
+                channels='#testing',
                 file=filepath,
                 initial_comment=f"{fcid}: These samples have RNAse Count <= 50 and G19 Score >= 0.01")
             assert result["file"]
@@ -169,39 +172,43 @@ class Handler(watchdog.events.FileSystemEventHandler):
         logger.info(f'This file has been changed. Source path --> {event.src_path}')
 
         today = datetime.strftime(datetime.today(), '%y%m%d')
-#         if bool(re.match(f'^.*{today}.*c19_read_counts.hdr.tsv?', event.src_path)):
+        #         if bool(re.match(f'^.*{today}.*c19_read_counts.hdr.tsv?', event.src_path)):
         if bool(re.match('^.*?210103.*?c19_read_counts\.csv?', event.src_path)):
 
-#             flowcell = event.src_path[20:51]
+            # flowcell = event.src_path[20:51]
             flowcell = event.src_path[39:70]
 
             logger.info(f'Flowcell {flowcell} c19_read_counts created!')
 
-#             current_read_counts = pd.read_csv(event.src_path, sep='\t')
+            # current_read_counts = pd.read_csv(event.src_path, sep='\t')
             current_read_counts = pd.read_csv(event.src_path)
             low_rnase_high_covid = Handler.sample_finder(current_read_counts)
 
-            if len(low_rnase_high_covid) != 0:
-                logger.info(f'There are anomaly samples in: {flowcell}')
+            client = slack_login()
 
-                salesforce_data = Handler.salesforce_query(low_rnase_high_covid)
+            if len(low_rnase_high_covid) != 0:
+                sf = sf_login()
+
+                logger.info(f'There are {int(len(low_rnase_high_covid)/3)} anomaly samples in: {flowcell}')
+
+                salesforce_data = Handler.salesforce_query(low_rnase_high_covid, sf)
                 merged_data = Handler.merge_sample_salesforce(low_rnase_high_covid, salesforce_data)
 
-                filename = flowcell + '_lowRNAse_COVIDpositive'
+                filename = flowcell + '_lowRNAse_COVIDpositive_test'
 
                 Handler.create_pdf(merged_data, filename)
-                Handler.slack_upload(flowcell, filename)
+                Handler.slack_upload(flowcell, filename, client)
 
                 logger.info(f'Salesforce API Usage: {sf.api_usage}')
 
             else:
-                client.chat_postMessage(channel='#g19_sample_observation',
+                client.chat_postMessage(channel='#testing',
                                         text=f'{flowcell}: No QC fail samples that are covid positive today! Have a great day :)')
                 logger.info('No QC fail samples that are covid positive today! Have a great day :)')
 
 
 if __name__ == "__main__":
-#     src_path = "/ghds/cv19/analysis"
+    #     src_path = "/ghds/cv19/analysis"
     src_path = "/ghds/groups/labdesk/bshih/"
     event_handler = Handler()
     observer = Observer()
