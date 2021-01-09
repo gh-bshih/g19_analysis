@@ -13,19 +13,23 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from watchdog.observers.polling import PollingObserver as Observer
 
+
 ### Salesforce API Login ###
-logininfo = json.load(open('/ghds/groups/labdesk/bshih/salesforce_login.json'))
+def sf_login():
+    logininfo = json.load(open('/ghds/groups/labdesk/bshih/salesforce_login.json'))
 
-username = logininfo['username']
-password = logininfo['password']
-security_token = logininfo['security_token']
-domain = 'login'
+    username = logininfo['username']
+    password = logininfo['password']
+    security_token = logininfo['security_token']
 
-sf = Salesforce(username=username, password=password, security_token=security_token)
+    return Salesforce(username=username, password=password, security_token=security_token)
+
 
 ### Slack Token ###
-slack_token = json.load(open('/ghds/groups/labdesk/bshih/slack_login.json'))['SLACK_TOKEN']
-client = WebClient(token=slack_token)
+def slack_login():
+    slack_token = json.load(open('/ghds/groups/labdesk/bshih/slack_login.json'))['SLACK_TOKEN']
+    return WebClient(token=slack_token)
+
 
 ### Logger Setup ###
 LOGGER_NAME = 'clinical_sample_observation'
@@ -63,11 +67,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
         return filtered
 
     @staticmethod
-    def salesforce_query(samples):
-        """
-        :param samples:
-        :return: Salesforce query of filtered samples
-        """
+    def salesforce_query(samples, sf):
         weird_samples = []
         for i in samples['run_sample_id'].unique():
             weird_samples.extend(sf.query_all(f"SELECT GH_Sample_ID__c, Status, Specimen_Collection_Date_Time__c, Specimen_receipt_date__c,\
@@ -82,9 +82,13 @@ class Handler(watchdog.events.FileSystemEventHandler):
                                                                   'Site_Name__c': 'Site Name'})
         df['Specimen Collection Date/Time'] = pd.to_datetime(df['Specimen Collection Date/Time']).dt \
             .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
-        df['State Authorities Notified Date'] = pd.to_datetime(df['State Authorities Notified Date']).dt \
-            .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
         df['Specimen receipt date'] = pd.to_datetime(df['Specimen receipt date']).dt.strftime('%-m/%-d/%y')
+
+        try:
+            df['State Authorities Notified Date'] = pd.to_datetime(df['State Authorities Notified Date']).dt \
+                .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
+        except TypeError:
+            pass
 
         return df
 
@@ -146,7 +150,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
         pp.close()
 
     @staticmethod
-    def slack_upload(fcid, file_name):
+    def slack_upload(fcid, file_name, client):
         filepath = f'/ghds/groups/labdesk/bshih/clinical_observation/{file_name}.pdf'
 
         try:
@@ -172,16 +176,20 @@ class Handler(watchdog.events.FileSystemEventHandler):
             current_read_counts = pd.read_csv(event.src_path, sep='\t')
             low_rnase_high_covid = Handler.sample_finder(current_read_counts)
 
-            if len(low_rnase_high_covid) != 0:
-                logger.info(f'There are anomaly samples in: {flowcell}')
+            client = slack_login()
 
-                salesforce_data = Handler.salesforce_query(low_rnase_high_covid)
+            if len(low_rnase_high_covid) != 0:
+                sf = sf_login()
+
+                logger.info(f'There are {int(len(low_rnase_high_covid)/3)} anomaly samples in: {flowcell}')
+
+                salesforce_data = Handler.salesforce_query(low_rnase_high_covid, sf)
                 merged_data = Handler.merge_sample_salesforce(low_rnase_high_covid, salesforce_data)
 
                 filename = flowcell + '_lowRNAse_COVIDpositive'
 
                 Handler.create_pdf(merged_data, filename)
-                Handler.slack_upload(flowcell, filename)
+                Handler.slack_upload(flowcell, filename, client)
 
                 logger.info(f'Salesforce API Usage: {sf.api_usage}')
 
