@@ -69,26 +69,36 @@ class Handler(watchdog.events.FileSystemEventHandler):
     @staticmethod
     def salesforce_query(samples, sf):
         weird_samples = []
+        accession = []
         for i in samples['run_sample_id'].unique():
             weird_samples.extend(sf.query_all(f"SELECT GH_Sample_ID__c, Status, Specimen_Collection_Date_Time__c, Specimen_receipt_date__c,\
                       State_Authorities_Notified_Date__c, Site_Name__c \
                       FROM Order WHERE GH_Sample_ID__c = '{i}'").get('records'))
 
+            accession.extend(sf.query_all(f"SELECT Specimen_Id__c, Accessioning_Verified_Date__c FROM Specimen__c\
+                                            WHERE Specimen_Id__c = '{i}'").get('records'))
+
         dataframe = pd.DataFrame(weird_samples)
-        df = dataframe.drop(columns='attributes').rename(columns={'GH_Sample_ID__c': 'GH Sample ID',
+        df = dataframe.drop(columns='attributes').rename(columns={'GH_Sample_ID__c': 'run_sample_id',
                                                                   'Specimen_Collection_Date_Time__c': 'Specimen Collection Date/Time',
-                                                                  'Specimen_receipt_date__c': 'Specimen receipt date',
                                                                   'State_Authorities_Notified_Date__c': 'State Authorities Notified Date',
                                                                   'Site_Name__c': 'Site Name'})
         df['Specimen Collection Date/Time'] = pd.to_datetime(df['Specimen Collection Date/Time']).dt \
             .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
-        df['Specimen receipt date'] = pd.to_datetime(df['Specimen receipt date']).dt.strftime('%-m/%-d/%y')
-
         try:
             df['State Authorities Notified Date'] = pd.to_datetime(df['State Authorities Notified Date']).dt \
                 .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
         except TypeError:
             pass
+
+        dataframe2 = pd.DataFrame(accession)
+        df2 = dataframe2.drop(columns='attributes').rename(columns={'Specimen_Id__c': 'run_sample_id',
+                                                                    'Accessioning_Verified_Date__c': 'accession_date'})
+
+        df2['accession_date'] = pd.to_datetime(df2['accession_date']).dt \
+            .tz_convert('US/Pacific').dt.strftime('%-m/%-d/%Y, %-I:%M %p')
+
+        df = df.merge(df2, left_on='run_sample_id', right_on='run_sample_id', how='left')
 
         return df
 
@@ -99,7 +109,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
         :param salesforce_data:
         :return: Merged dataframe samples with salesforce data
         """
-        df = pd.merge(samples, salesforce_data, left_on='run_sample_id', right_on='GH Sample ID', how='left').loc[:,
+        df = pd.merge(samples, salesforce_data, left_on='run_sample_id', right_on='run_sample_id', how='left').loc[:,
              ['runid',
               'run_sample_id',
               'covid_ratio',
@@ -109,7 +119,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
               'replicate_call',
               'replicate_flags',
               'Specimen Collection Date/Time',
-              'Specimen receipt date',
+              'accession_date',
               'State Authorities Notified Date',
               'Site Name']] \
             .sort_values(by=['runid', 'run_sample_id', 'covid_ratio'], ascending=[False, True, True])
@@ -122,7 +132,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
 
         df['group'] = (df['run_sample_id'].shift() != df['run_sample_id']).cumsum()
         df.loc[df.duplicated('group'), ['runid', 'run_sample_id', 'new_median', 'Specimen Collection Date/Time',
-                                        'Specimen receipt date', 'State Authorities Notified Date', 'Site Name',
+                                        'accession_date', 'State Authorities Notified Date', 'Site Name',
                                         'new_median']] = ''
         df.drop(columns=['group'], inplace=True)
 
