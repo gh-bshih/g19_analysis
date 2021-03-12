@@ -178,7 +178,7 @@ class Handler(watchdog.events.FileSystemEventHandler):
 
     def on_created(self, event):
         today = datetime.strftime(datetime.today(), '%y%m%d')
-        if bool(re.match(f'^.*?{today}.*?c19_read_counts\.hdr\.tsv$', event.src_path)):
+        if bool(re.match(f'^.+?\..+?\..+?c19_read_counts\.hdr\.tsv$', event.src_path)):
 
             flowcell = event.src_path[20:51]
             logger.info(f'Flowcell {flowcell} c19_read_counts {event.event_type}!')
